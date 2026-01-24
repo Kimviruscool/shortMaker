@@ -1,44 +1,68 @@
-# downloader.py
 import yt_dlp
 import os
 import re
 import json
+import sys
 
 
 class VideoDownloader:
-    def __init__(self, output_folder="downloads"):
+    def __init__(self, output_folder="Shorts_Result"):
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
         self.output_folder = output_folder
 
-        self.ydl_opts = {
-            'outtmpl': f'{self.output_folder}/%(title)s.%(ext)s',
-            'format': 'best[ext=mp4]',  # 단일 파일 최고화질 (ffmpeg 의존성 최소화)
+        # ------------------------------------------------------------
+        # 🔧 FFmpeg 위치 찾기 (절대 경로)
+        # ------------------------------------------------------------
+        current_file_path = os.path.abspath(__file__)
+        downloads_dir = os.path.dirname(current_file_path)
+        project_root = os.path.dirname(downloads_dir)
 
-            # 자막 설정
+        ffmpeg_binary_path = os.path.join(project_root, "ffmpeg.exe")
+
+        if not os.path.exists(ffmpeg_binary_path):
+            print(f"⚠️ [경고] FFmpeg 파일을 찾을 수 없습니다: {ffmpeg_binary_path}")
+        else:
+            print(f"🔧 FFmpeg 감지됨: {ffmpeg_binary_path}")
+
+        # ------------------------------------------------------------
+        # 다운로드 옵션 설정
+        # ------------------------------------------------------------
+        self.ydl_opts_base = {
+            'outtmpl': f'{self.output_folder}/%(title)s.%(ext)s',
+
+            # 🚨 [수정 완료] 이제 FFmpeg가 있으므로, '최고화질(분리형)'을 요청합니다.
+            # 이 설정이 있어야 'Requested format is not available' 에러가 사라집니다.
+            'format': 'bestvideo+bestaudio/best',
+
+            # FFmpeg 위치 지정
+            'ffmpeg_location': ffmpeg_binary_path,
+
+            # 합치기 및 mp4 변환 설정
+            'merge_output_format': 'mp4',
+            'postprocessors': [{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp4',
+            }],
+
+            # 자막 및 기타 설정
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': ['ko'],
             'subtitlesformat': 'srt',
-
             'quiet': True,
             'no_warnings': True,
-            'cookiesfrombrowser': ('chrome',),
-
+            'cookiefile': os.path.join(project_root, 'cookies.txt'),
+            'extractor_args': {'youtube': {'player_client': ['web']}},
         }
 
     def _srt_to_json(self, srt_path):
-        """SRT 파일을 n8n 스타일 JSON으로 변환"""
         if not os.path.exists(srt_path): return None
-
         with open(srt_path, 'r', encoding='utf-8') as f:
             content = f.read()
-
-        # 정규식: "순번\n시작 --> 종료\n대사"
         pattern = re.compile(r'(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n(.*?)(?=\n\n|\Z)',
                              re.DOTALL)
         matches = pattern.findall(content)
-
         transcript_data = []
 
         def time_to_sec(t_str):
@@ -48,45 +72,38 @@ class VideoDownloader:
         for match in matches:
             _, start_str, end_str, text = match
             text = text.replace('\n', ' ').strip()
-            text = re.sub(r'<[^>]+>', '', text)  # 태그 제거
-
+            text = re.sub(r'<[^>]+>', '', text)
             start = time_to_sec(start_str)
             end = time_to_sec(end_str)
-
-            transcript_data.append({
-                "start": start,
-                "dur": round(end - start, 3),
-                "text": text
-            })
-
-        # JSON 저장
+            transcript_data.append({"start": start, "dur": round(end - start, 3), "text": text})
         json_path = srt_path.replace('.srt', '.json')
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(transcript_data, f, ensure_ascii=False, indent=2)
-
         return json_path
 
-    def process(self, url):
-        """다운로드 실행 및 변환"""
-        print(f"⬇️ [다운로드] 작업 시작... ({url})")
+    def process(self, url, start_time=0, duration=60):
+        print(f"⬇️ [다운로드] {start_time}초 ~ {start_time + duration}초 구간 추출 중...")
 
-        with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+        opts = self.ydl_opts_base.copy()
+        opts['download_ranges'] = lambda info, ydl: [{
+            'start_time': start_time,
+            'end_time': start_time + duration
+        }]
+        opts['force_keyframes_at_cuts'] = True
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
             try:
-                # 1. 다운로드 수행
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
 
-                # 확장자 보정 (.mkv 등으로 받아질 경우 대비)
                 base, ext = os.path.splitext(filename)
-                if not os.path.exists(filename):
-                    for e in ['.mp4', '.mkv', '.webm']:
-                        if os.path.exists(base + e):
-                            filename = base + e
-                            break
+                final_filename = f"{base}.mp4"
 
-                print(f"   ✅ 영상 저장: {filename}")
+                if os.path.exists(final_filename):
+                    print(f"   ✅ 영상 저장: {final_filename}")
+                elif os.path.exists(filename):
+                    print(f"   ✅ 영상 저장: {filename}")
 
-                # 2. 자막 변환
                 srt_path = f"{base}.ko.srt"
                 json_path = None
 
@@ -94,10 +111,17 @@ class VideoDownloader:
                     json_path = self._srt_to_json(srt_path)
                     print(f"   ✅ 대사 추출: {json_path}")
                 else:
-                    print("   ⚠️ 자막 파일이 없어 대사 추출 생략")
+                    # 폴더 내 검색 (파일명 불일치 대비)
+                    for file in os.listdir(self.output_folder):
+                        if file.endswith(".ko.srt") and base in os.path.join(self.output_folder, file):
+                            json_path = self._srt_to_json(os.path.join(self.output_folder, file))
+                            print(f"   ✅ 대사 추출(재검색): {json_path}")
+                            break
+                    if not json_path:
+                        print("   ⚠️ 자막 파일이 생성되지 않았습니다.")
 
                 return True
 
             except Exception as e:
-                print(f"❌ 다운로드 중 오류: {e}")
+                print(f"❌ 다운로드 오류: {e}")
                 return False
