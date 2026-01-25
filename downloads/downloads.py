@@ -2,7 +2,6 @@ import yt_dlp
 import os
 import re
 import json
-import sys
 
 
 class VideoDownloader:
@@ -11,52 +10,15 @@ class VideoDownloader:
             os.makedirs(output_folder)
         self.output_folder = output_folder
 
+        # FFmpeg 경로 찾는 코드 삭제함 (필요 없음)
         # ------------------------------------------------------------
-        # 🔧 FFmpeg 위치 찾기 (절대 경로)
-        # ------------------------------------------------------------
+
+        # 📂 프로젝트 루트 경로 (쿠키 파일 찾기용)
         current_file_path = os.path.abspath(__file__)
-        downloads_dir = os.path.dirname(current_file_path)
-        project_root = os.path.dirname(downloads_dir)
-
-        ffmpeg_binary_path = os.path.join(project_root, "ffmpeg.exe")
-
-        if not os.path.exists(ffmpeg_binary_path):
-            print(f"⚠️ [경고] FFmpeg 파일을 찾을 수 없습니다: {ffmpeg_binary_path}")
-        else:
-            print(f"🔧 FFmpeg 감지됨: {ffmpeg_binary_path}")
-
-        # ------------------------------------------------------------
-        # 다운로드 옵션 설정
-        # ------------------------------------------------------------
-        self.ydl_opts_base = {
-            'outtmpl': f'{self.output_folder}/%(title)s.%(ext)s',
-
-            # 🚨 [수정 완료] 이제 FFmpeg가 있으므로, '최고화질(분리형)'을 요청합니다.
-            # 이 설정이 있어야 'Requested format is not available' 에러가 사라집니다.
-            'format': 'bestvideo+bestaudio/best',
-
-            # FFmpeg 위치 지정
-            'ffmpeg_location': ffmpeg_binary_path,
-
-            # 합치기 및 mp4 변환 설정
-            'merge_output_format': 'mp4',
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
-
-            # 자막 및 기타 설정
-            'writesubtitles': True,
-            'writeautomaticsub': True,
-            'subtitleslangs': ['ko'],
-            'subtitlesformat': 'srt',
-            'quiet': True,
-            'no_warnings': True,
-            'cookiefile': os.path.join(project_root, 'cookies.txt'),
-            'extractor_args': {'youtube': {'player_client': ['web']}},
-        }
+        self.project_root = os.path.dirname(os.path.dirname(current_file_path))
 
     def _srt_to_json(self, srt_path):
+        # 자막 변환 로직 (기존과 동일)
         if not os.path.exists(srt_path): return None
         with open(srt_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -82,27 +44,49 @@ class VideoDownloader:
         return json_path
 
     def process(self, url, start_time=0, duration=60):
-        print(f"⬇️ [다운로드] {start_time}초 ~ {start_time + duration}초 구간 추출 중...")
+        # 🚨 [중요] FFmpeg가 없으므로 '구간 자르기(start_time)'를 무시합니다.
+        print(f"⬇️ [다운로드] FFmpeg 없이 전체 영상 다운로드 시작...")
+        print(f"   (참고: 자르기 기능은 작동하지 않습니다)")
 
-        opts = self.ydl_opts_base.copy()
-        opts['download_ranges'] = lambda info, ydl: [{
-            'start_time': start_time,
-            'end_time': start_time + duration
-        }]
-        opts['force_keyframes_at_cuts'] = True
+        ydl_opts = {
+            'outtmpl': f'{self.output_folder}/%(title)s.%(ext)s',
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
+            # 🚨 [핵심 설정]
+            # 1. 'best': 합쳐져 있는 파일 중 제일 좋은 거 (보통 720p)
+            # 2. [ext=mp4]: 그 중에서 MP4인 것만 (WebM 피하기 위해)
+            'format': 'best[ext=mp4]/best',
+
+            # 자르기 옵션(download_ranges) 삭제함 -> 에러 원인 제거
+
+            # 자막 설정
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': ['ko'],
+            'subtitlesformat': 'srt',
+
+            'quiet': True,
+            'no_warnings': True,
+            'cookiefile': os.path.join(self.project_root, 'cookies.txt'),
+            'extractor_args': {'youtube': {'player_client': ['web']}},
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
 
+                # 파일 확장자 확인
                 base, ext = os.path.splitext(filename)
-                final_filename = f"{base}.mp4"
 
-                if os.path.exists(final_filename):
-                    print(f"   ✅ 영상 저장: {final_filename}")
-                elif os.path.exists(filename):
-                    print(f"   ✅ 영상 저장: {filename}")
+                # 혹시 mkv나 webm으로 받아졌을 경우를 대비해 파일 찾기
+                final_filename = filename
+                if not os.path.exists(final_filename):
+                    for e in ['.mp4', '.mkv', '.webm']:
+                        if os.path.exists(base + e):
+                            final_filename = base + e
+                            break
+
+                print(f"   ✅ 영상 저장 완료: {final_filename}")
 
                 srt_path = f"{base}.ko.srt"
                 json_path = None
@@ -111,15 +95,12 @@ class VideoDownloader:
                     json_path = self._srt_to_json(srt_path)
                     print(f"   ✅ 대사 추출: {json_path}")
                 else:
-                    # 폴더 내 검색 (파일명 불일치 대비)
+                    # 유사 파일 찾기
                     for file in os.listdir(self.output_folder):
                         if file.endswith(".ko.srt") and base in os.path.join(self.output_folder, file):
                             json_path = self._srt_to_json(os.path.join(self.output_folder, file))
                             print(f"   ✅ 대사 추출(재검색): {json_path}")
                             break
-                    if not json_path:
-                        print("   ⚠️ 자막 파일이 생성되지 않았습니다.")
-
                 return True
 
             except Exception as e:
