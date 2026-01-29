@@ -88,41 +88,51 @@ class Downloader:
                 ydl_opts.update({'format': 'best[ext=mp4]/best'})
 
             # 3. 다운로드 실행 (Try-Except)
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    filename = ydl.prepare_filename(info)
-                    base_name = os.path.splitext(os.path.basename(filename))[0]
+                # ... (앞부분 import 및 클래스 선언 동일) ...
 
-                    print(f"✅ [성공] '{mode}' 모드로 다운로드 완료!")
-                    self._convert_subtitle_to_txt(base_name)
-                    return True  # 성공하면 즉시 함수 종료
+                # 3. 다운로드 실행 (Try-Except)
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                        filename = ydl.prepare_filename(info)
+                        base_name = os.path.splitext(os.path.basename(filename))[0]
 
-            except Exception as e:
-                print(f"💥 [실패] '{mode}' 모드 차단됨 또는 오류: {e}")
-                if attempt < len(retry_strategies):
-                    print("   👉 다음 모드로 우회 시도합니다...")
-                    time.sleep(2)  # 잠시 대기
-                else:
-                    print("❌ [최종 실패] 모든 우회 수단이 막혔습니다.")
-                    return False
+                        print(f"✅ [성공] '{mode}' 모드로 다운로드 완료!")
 
-    def _convert_subtitle_to_txt(self, base_name):
-        # (기존 자막 변환 코드와 동일)
-        search_pattern = os.path.join(self.output_folder, f"{glob.escape(base_name)}*.srt")
-        srt_files = glob.glob(search_pattern)
-        if not srt_files: return
-        try:
-            with open(srt_files[0], 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            text_content = []
-            for line in lines:
-                l = line.strip()
-                if l.isdigit() or '-->' in l or not l: continue
-                text_content.append(l)
-            txt_path = srt_files[0].replace(".srt", ".txt")
-            with open(txt_path, 'w', encoding='utf-8') as f:
-                f.write("\n".join(text_content))
-            print(f"✅ [자막] 변환 완료")
-        except:
-            pass
+                        # 🚨 수정된 부분: 텍스트 파일 경로를 받아서 반환합니다.
+                        txt_path = self._convert_subtitle_to_txt(base_name)
+
+                        if txt_path:
+                            return txt_path  # 성공 시 파일 경로 반환
+                        else:
+                            # 영상은 받았는데 자막이 없는 경우도 성공으로 칠지 결정 필요
+                            # 일단은 텍스트가 없으면 다음 단계 진행이 안 되니 False로 둡니다.
+                            print("❌ [실패] 영상은 받았으나 텍스트 추출에 실패했습니다.")
+                            return None
+
+                except Exception as e:
+                    print(f"💥 [실패] '{mode}' 모드 차단됨 또는 오류: {e}")
+                    if attempt < len(retry_strategies):
+                        print("   👉 다음 모드로 우회 시도합니다...")
+                        time.sleep(2)
+                    else:
+                        print("❌ [최종 실패] 모든 우회 수단이 막혔습니다.")
+                        return None  # 최종 실패 시 None 반환
+
+            def _convert_subtitle_to_txt(self, base_name):
+                # ... (검색 로직 동일) ...
+                search_pattern = os.path.join(self.output_folder, f"{glob.escape(base_name)}*.srt")
+                srt_files = glob.glob(search_pattern)
+                if not srt_files: return None  # None 반환
+
+                # ... (변환 로직 동일) ...
+                try:
+                    # ... (파일 읽기/쓰기 동일) ...
+                    with open(txt_path, 'w', encoding='utf-8') as f:
+                        f.write("\n".join(text_content))
+
+                    print(f"✅ [자막] 변환 완료: {os.path.basename(txt_path)}")
+                    return txt_path  # 🚨 중요: 생성된 .txt 파일의 절대 경로를 반환
+
+                except:
+                    return None
