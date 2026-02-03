@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>ShortMaker AI Web</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .container { max-width: 600px; margin-top: 100px; }
+        .loader { display: none; } /* 로딩 바 */
+    </style>
+</head>
+<body>
+    <div class="container bg-white p-5 rounded shadow">
+        <h2 class="text-center mb-4">🎬 ShortMaker AI</h2>
+        <p class="text-muted text-center">유튜브 링크를 입력하면 AI가 쇼츠용 대본을 만들어줍니다.</p>
+
+        <form id="shortsForm">
+            <div class="mb-3">
+                <input type="text" name="url" id="url" class="form-control" placeholder="https://youtube.com/..." required>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">쇼츠 만들기 시작</button>
+        </form>
+
+        <div id="result" class="mt-4 text-center"></div>
+        <div class="loader spinner-border text-primary mt-3" role="status"></div>
+    </div>
+
+    <script>
+        document.getElementById('shortsForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const resultDiv = document.getElementById('result');
+            const loader = document.querySelector('.loader');
+
+            resultDiv.innerText = "작업을 시작합니다. 잠시만 기다려주세요...";
+            loader.style.display = "inline-block";
+
+            const formData = new FormData(e.target);
+            const response = await fetch('/create-shorts', { method: 'POST', body: formData });
+            const data = await response.json();
+
+            loader.style.display = "none";
+            if(data.message) {
+                resultDiv.innerHTML = `<div class="alert alert-success">${data.message}<br>제목: ${data.title}</div>`;
+            } else {
+                resultDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+            }
+        };
+    </script>
+</body>
+</html>
